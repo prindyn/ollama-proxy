@@ -5,7 +5,6 @@ import os
 import json
 from loguru import logger
 from .logger import configure_logger
-from .tools import execute_tool_call
 from .openai_adapter import format_chat_response, stream_chat_response
 
 configure_logger()
@@ -13,13 +12,14 @@ configure_logger()
 app = FastAPI(title="Ollama Proxy", description="OpenAI compatible API for Ollama models")
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-USE_LOCAL_TOOLS = os.getenv("ENABLE_LOCAL_TOOLS", "1") == "1"
+
 
 
 @app.on_event("startup")
 async def startup_event():
     logger.info("Starting up proxy, connecting to {url}", url=OLLAMA_BASE_URL)
     app.state.client = httpx.AsyncClient(base_url=OLLAMA_BASE_URL, timeout=None)
+    app.state.responses = {}
 
 
 @app.on_event("shutdown")
@@ -30,6 +30,20 @@ async def shutdown_event():
 @app.get("/")
 async def root():
     return {"message": "Ollama proxy running"}
+
+
+@app.get("/v1/responses")
+async def list_responses():
+    """Return stored responses."""
+    return {"object": "list", "data": list(app.state.responses.values())}
+
+
+@app.get("/v1/responses/{resp_id}")
+async def get_response(resp_id: str):
+    resp = app.state.responses.get(resp_id)
+    if resp is None:
+        raise HTTPException(status_code=404, detail="Response not found")
+    return JSONResponse(resp)
 
 @app.get("/v1/models")
 async def list_models():
@@ -82,24 +96,8 @@ async def chat_completions(request: Request):
         data = resp.json()
         logger.debug("Ollama response: {}", data)
 
-        if USE_LOCAL_TOOLS:
-            tool_calls = []
-            for choice in data.get("choices", []):
-                calls = choice.get("message", {}).get("tool_calls")
-                if calls:
-                    tool_calls.extend(calls)
-            if tool_calls:
-                tool_messages = [execute_tool_call(tc) for tc in tool_calls]
-                model_msgs = [c.get("message") for c in data.get("choices", []) if c.get("message")]
-                payload["messages"] = messages + model_msgs + tool_messages
-                payload["stream"] = False
-                logger.debug("Executing %d tool calls locally", len(tool_calls))
-                resp = await app.state.client.post("/api/chat", json=payload)
-                resp.raise_for_status()
-                data = resp.json()
-                logger.debug("Ollama response after tools: {}", data)
-
         formatted = format_chat_response(data)
+        app.state.responses[formatted["id"]] = formatted
         logger.debug("Proxy response body: {}", formatted)
         return JSONResponse(formatted)
     except httpx.HTTPError as e:
