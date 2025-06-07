@@ -1,10 +1,13 @@
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
 import httpx
 import os
+from datetime import datetime
 from loguru import logger
+from langchain.llms import Ollama
+from langchain.agents import initialize_agent, AgentType
 from .logger import configure_logger, log_conversation
-from .openai_adapter import format_chat_response, stream_chat_response
+from .tools import get_tools
 
 configure_logger()
 
@@ -61,36 +64,39 @@ async def list_models():
 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
-    """Proxy OpenAI chat completions to Ollama"""
+    """Generate a chat completion using LangChain tools."""
     body = await request.json()
     model = body.get("model")
     messages = body.get("messages")
-    stream = body.get("stream", False)
     if not model or not messages:
         raise HTTPException(status_code=400, detail="model and messages required")
 
-    payload = body
+    user_input = next((m.get("content") for m in reversed(messages) if m.get("role") == "user"), None)
+    if not user_input:
+        raise HTTPException(status_code=400, detail="No user input found")
 
     try:
-        logger.info("Forwarding chat completion to Ollama: model=%s stream=%s", model, stream)
-        resp = await app.state.client.post("/api/chat", json=payload)
-        resp.raise_for_status()
-        if stream:
-            def record_response(res):
-                app.state.responses[res["id"]] = res
-                log_conversation(request.url.path, body, res)
+        llm = Ollama(model=model, base_url=OLLAMA_BASE_URL)
+        agent = initialize_agent(get_tools(), llm, agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION, verbose=False)
+        answer = agent.invoke({"input": user_input})
 
-            async def iterator():
-                async for chunk in stream_chat_response(resp, on_complete=record_response):
-                    yield chunk
-            return StreamingResponse(iterator(), media_type="text/event-stream")
+        res = {
+            "id": f"chatcmpl-{int(datetime.now().timestamp())}",
+            "object": "chat.completion",
+            "created": int(datetime.now().timestamp()),
+            "model": model,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": answer},
+                    "finish_reason": "stop",
+                }
+            ],
+        }
 
-        data = resp.json()
-
-        formatted = format_chat_response(data)
-        app.state.responses[formatted["id"]] = formatted
-        log_conversation(request.url.path, body, formatted)
-        return JSONResponse(formatted)
+        app.state.responses[res["id"]] = res
+        log_conversation(request.url.path, body, res)
+        return JSONResponse(res)
     except httpx.HTTPError as e:
         logger.error("Error from Ollama: {}", e)
         detail = getattr(e, "response", None)

@@ -5,8 +5,8 @@ This project provides a small FastAPI service that exposes an OpenAI-compatible 
 ## Features
 
 - `/v1/models` lists available Ollama models.
-- `/v1/chat/completions` proxies chat completion requests using the same payload structure as the OpenAI API and transforms the response back into the OpenAI format.
-- Supports tool usage (`tools` and `tool_choice`) when forwarding to Ollama.
+- `/v1/chat/completions` generates completions using LangChain with an Ollama model.
+- Built-in tools (shell, file operations, web search) are available to the agent.
 - `/v1/responses` lists previous chat completions.
 - Chat requests and responses are saved to NDJSON files under `logs/`. The file
   name matches the last part of the request path, e.g. `completions.ndjson`. Each
@@ -27,4 +27,5 @@ This project provides a small FastAPI service that exposes an OpenAI-compatible 
    ```
 
 The service will then be accessible at `http://localhost:8000` and can be used with libraries expecting the OpenAI API. Requests and responses follow the same schema as OpenAI's endpoints. Set `OLLAMA_BASE_URL` to change the upstream Ollama URL. Logging is handled with [Loguru](https://github.com/Delgan/loguru). The logger configuration lives in `app/logger.py` and respects the `LOGURU_LEVEL`, `LOG_FILE`, and `LOG_DIR` environment variables.
+The agent uses LangChain to execute simple tools like `shell` or file operations during generation.
 

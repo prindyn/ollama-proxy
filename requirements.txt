@@ -4,3 +4,4 @@ httpx
 pydantic
 loguru
 python-dotenv
+langchain
