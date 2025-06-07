@@ -98,6 +98,12 @@ async def chat_completions(request: Request):
             try:
                 err = detail.json()
             except Exception:
-                err = detail.text
+                err = {"error": detail.text}
+            log_conversation(request.url.path, body, err)
             raise HTTPException(status_code=detail.status_code, detail=err)
+        log_conversation(request.url.path, body, {"error": str(e)})
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        logger.error("Unhandled error: {}", e)
+        log_conversation(request.url.path, body, {"error": str(e)})
         raise HTTPException(status_code=500, detail=str(e))

@@ -10,8 +10,8 @@ This project provides a small FastAPI service that exposes an OpenAI-compatible 
 - `/v1/responses` lists previous chat completions.
 - Chat requests and responses are saved to NDJSON files under `logs/`. The file
   name matches the last part of the request path, e.g. `completions.ndjson`. Each
-  request and response is written as a separate line so the file can be
-  processed as an NDJSON log.
+  request and response (including errors) is written as a separate line so the
+  file can be processed as an NDJSON log.
 
 ## Usage
 
