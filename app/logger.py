@@ -25,12 +25,14 @@ def configure_logger() -> None:
         logger.add(log_file, level=level, format=fmt, rotation="1 MB")
 
 
-def log_conversation(request: dict, response) -> None:
-    """Append the request and response pair to a JSONL conversation log."""
+def log_conversation(request: dict, response: dict) -> None:
+    """Append the request and response as individual JSON lines."""
     log_dir = os.getenv("LOG_DIR", "logs")
     Path(log_dir).mkdir(parents=True, exist_ok=True)
     log_path = Path(log_dir) / "conversations.log"
     with log_path.open("a") as f:
-        json.dump({"request": request, "response": response}, f)
+        json.dump(request, f)
+        f.write("\n")
+        json.dump(response, f)
         f.write("\n")
 
