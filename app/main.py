@@ -2,29 +2,41 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 import httpx
 import os
-import json
 
-app = FastAPI(title="Ollama Proxy", description="OpenAI compatible API for Ollama models")
+app = FastAPI(
+    title="Ollama Proxy", description="OpenAI compatible API for Ollama models"
+)
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
-client = httpx.AsyncClient(base_url=OLLAMA_BASE_URL)
+
+@app.on_event("startup")
+async def startup_event():
+    app.state.client = httpx.AsyncClient(base_url=OLLAMA_BASE_URL, timeout=None)
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    await app.state.client.aclose()
+
 
 @app.get("/")
 async def root():
     return {"message": "Ollama proxy running"}
 
+
 @app.get("/v1/models")
 async def list_models():
     """Return available models from Ollama"""
     try:
-        resp = await client.get("/api/tags")
+        resp = await app.state.client.get("/api/tags")
         resp.raise_for_status()
         data = resp.json()
         models = [{"id": m["name"], "object": "model"} for m in data.get("models", [])]
         return {"object": "list", "data": models}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
@@ -47,12 +59,14 @@ async def chat_completions(request: Request):
             payload[key] = body[key]
 
     try:
-        resp = await client.post("/api/chat", json=payload, timeout=None)
+        resp = await app.state.client.post("/api/chat", json=payload)
         resp.raise_for_status()
         if stream:
+
             async def iterator():
                 async for chunk in resp.aiter_text():
                     yield chunk
+
             return StreamingResponse(iterator(), media_type="text/event-stream")
         return JSONResponse(resp.json())
     except httpx.HTTPError as e:

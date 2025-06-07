@@ -14,10 +14,10 @@ This project provides a small FastAPI service that exposes an OpenAI-compatible 
    ```bash
    pip install -r requirements.txt
    ```
-2. Run an Ollama server locally (or set `OLLAMA_BASE_URL` to point to a remote server).
+2. Run an Ollama server locally or set `OLLAMA_BASE_URL` to point to a remote instance.
 3. Start the proxy:
    ```bash
    uvicorn app.main:app --reload
    ```
 
-The service will then be accessible at `http://localhost:8000` and can be used with libraries expecting the OpenAI API.
+The service will then be accessible at `http://localhost:8000` and can be used with libraries expecting the OpenAI API. Set `OLLAMA_BASE_URL` to change the upstream Ollama URL.
