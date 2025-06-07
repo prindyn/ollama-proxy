@@ -2,11 +2,11 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 import httpx
 import os
+import json
 from loguru import logger
-from dotenv import load_dotenv
 from .logger import configure_logger
+from .tools import execute_tool_call
 
-load_dotenv()
 configure_logger()
 
 app = FastAPI(
@@ -14,6 +14,7 @@ app = FastAPI(
 )
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+USE_LOCAL_TOOLS = os.getenv("ENABLE_LOCAL_TOOLS", "1") == "1"
 
 
 @app.on_event("startup")
@@ -55,7 +56,6 @@ async def chat_completions(request: Request):
     model = body.get("model")
     messages = body.get("messages")
     stream = body.get("stream", False)
-    logger.debug("Request to Ollama: {}", body)
     if not model or not messages:
         raise HTTPException(status_code=400, detail="model and messages required")
 
@@ -75,7 +75,6 @@ async def chat_completions(request: Request):
         )
         resp = await app.state.client.post("/api/chat", json=payload)
         resp.raise_for_status()
-        logger.debug("Response from Ollama: {}", resp.json())
         if stream:
 
             async def iterator():
@@ -83,7 +82,30 @@ async def chat_completions(request: Request):
                     yield chunk
 
             return StreamingResponse(iterator(), media_type="text/event-stream")
-        return JSONResponse(resp.json())
+
+        data = resp.json()
+
+        if USE_LOCAL_TOOLS:
+            tool_calls = []
+            for choice in data.get("choices", []):
+                calls = choice.get("message", {}).get("tool_calls")
+                if calls:
+                    tool_calls.extend(calls)
+            if tool_calls:
+                tool_messages = [execute_tool_call(tc) for tc in tool_calls]
+                model_msgs = [
+                    c.get("message")
+                    for c in data.get("choices", [])
+                    if c.get("message")
+                ]
+                payload["messages"] = messages + model_msgs + tool_messages
+                payload["stream"] = False
+                logger.debug("Executing %d tool calls locally", len(tool_calls))
+                resp = await app.state.client.post("/api/chat", json=payload)
+                resp.raise_for_status()
+                data = resp.json()
+
+        return JSONResponse(data)
     except httpx.HTTPError as e:
         logger.error("Error from Ollama: {}", e)
         detail = getattr(e, "response", None)
