@@ -4,7 +4,9 @@ import httpx
 import os
 from loguru import logger
 
-app = FastAPI(title="Ollama Proxy", description="OpenAI compatible API for Ollama models")
+app = FastAPI(
+    title="Ollama Proxy", description="OpenAI compatible API for Ollama models"
+)
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
@@ -20,9 +22,11 @@ async def shutdown_event():
     logger.info("Shutting down proxy")
     await app.state.client.aclose()
 
+
 @app.get("/")
 async def root():
     return {"message": "Ollama proxy running"}
+
 
 @app.get("/v1/models")
 async def list_models():
@@ -37,6 +41,7 @@ async def list_models():
     except Exception as e:
         logger.error("Error fetching models: {}", e)
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
@@ -59,13 +64,17 @@ async def chat_completions(request: Request):
             payload[key] = body[key]
 
     try:
-        logger.debug("Forwarding chat completion to Ollama: model=%s stream=%s", model, stream)
+        logger.debug(
+            "Forwarding chat completion to Ollama: model=%s stream=%s", model, stream
+        )
         resp = await app.state.client.post("/api/chat", json=payload)
         resp.raise_for_status()
         if stream:
+
             async def iterator():
                 async for chunk in resp.aiter_text():
                     yield chunk
+
             return StreamingResponse(iterator(), media_type="text/event-stream")
         return JSONResponse(resp.json())
     except httpx.HTTPError as e:
