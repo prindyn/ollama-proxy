@@ -6,6 +6,7 @@ import json
 from loguru import logger
 from .logger import configure_logger
 from .tools import execute_tool_call
+from .openai_adapter import format_chat_response, stream_chat_response
 
 configure_logger()
 
@@ -67,12 +68,14 @@ async def chat_completions(request: Request):
             payload[key] = body[key]
 
     try:
-        logger.debug("Forwarding chat completion to Ollama: model=%s stream=%s", model, stream)
+        logger.debug(
+            "Forwarding chat completion to Ollama: model=%s stream=%s", model, stream
+        )
         resp = await app.state.client.post("/api/chat", json=payload)
         resp.raise_for_status()
         if stream:
             async def iterator():
-                async for chunk in resp.aiter_text():
+                async for chunk in stream_chat_response(resp):
                     yield chunk
             return StreamingResponse(iterator(), media_type="text/event-stream")
 
@@ -96,8 +99,9 @@ async def chat_completions(request: Request):
                 data = resp.json()
                 logger.debug("Ollama response after tools: {}", data)
 
-        logger.debug("Proxy response body: {}", data)
-        return JSONResponse(data)
+        formatted = format_chat_response(data)
+        logger.debug("Proxy response body: {}", formatted)
+        return JSONResponse(formatted)
     except httpx.HTTPError as e:
         logger.error("Error from Ollama: {}", e)
         detail = getattr(e, "response", None)

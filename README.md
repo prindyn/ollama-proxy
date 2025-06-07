@@ -5,7 +5,7 @@ This project provides a small FastAPI service that exposes an OpenAI-compatible 
 ## Features
 
 - `/v1/models` lists available Ollama models.
-- `/v1/chat/completions` proxies chat completion requests using the same payload structure as the OpenAI API.
+- `/v1/chat/completions` proxies chat completion requests using the same payload structure as the OpenAI API and transforms the response back into the OpenAI format.
 - Supports tool usage (`tools` and `tool_choice`) when forwarding to Ollama.
 - Optional local tool execution for basic file operations and a stub web search.
 - When Loguru is set to DEBUG level, request and response bodies are logged for troubleshooting.
@@ -23,6 +23,6 @@ This project provides a small FastAPI service that exposes an OpenAI-compatible 
    uvicorn app.main:app --reload
    ```
 
-The service will then be accessible at `http://localhost:8000` and can be used with libraries expecting the OpenAI API. Set `OLLAMA_BASE_URL` to change the upstream Ollama URL. Logging is handled with [Loguru](https://github.com/Delgan/loguru). The logger configuration lives in `app/logger.py` and respects the `LOGURU_LEVEL` environment variable.
+The service will then be accessible at `http://localhost:8000` and can be used with libraries expecting the OpenAI API. Requests and responses follow the same schema as OpenAI's endpoints. Set `OLLAMA_BASE_URL` to change the upstream Ollama URL. Logging is handled with [Loguru](https://github.com/Delgan/loguru). The logger configuration lives in `app/logger.py` and respects the `LOGURU_LEVEL` environment variable.
 
 Set `ENABLE_LOCAL_TOOLS=1` (default) to let the proxy execute built-in tools like `read_file`, `write_file`, `list_directory` and a placeholder `web_search`. When disabled, tool calls are only forwarded to Ollama.
