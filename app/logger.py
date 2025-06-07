@@ -30,7 +30,7 @@ def log_conversation(endpoint: str, request: dict, response: dict) -> None:
     log_dir = os.getenv("LOG_DIR", "logs")
     Path(log_dir).mkdir(parents=True, exist_ok=True)
     name = endpoint.strip("/").split("/")[-1] or "root"
-    log_path = Path(log_dir) / f"{name}.json"
+    log_path = Path(log_dir) / f"{name}.ndjson"
     with log_path.open("a") as f:
         json.dump(request, f)
         f.write("\n")
