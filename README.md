@@ -20,4 +20,4 @@ This project provides a small FastAPI service that exposes an OpenAI-compatible 
    uvicorn app.main:app --reload
    ```
 
-The service will then be accessible at `http://localhost:8000` and can be used with libraries expecting the OpenAI API. Set `OLLAMA_BASE_URL` to change the upstream Ollama URL.
+The service will then be accessible at `http://localhost:8000` and can be used with libraries expecting the OpenAI API. Set `OLLAMA_BASE_URL` to change the upstream Ollama URL. Logging is handled with [Loguru](https://github.com/Delgan/loguru); configure the `LOGURU_LEVEL` environment variable to adjust verbosity.
