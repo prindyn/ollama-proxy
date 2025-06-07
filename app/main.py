@@ -86,7 +86,7 @@ async def chat_completions(request: Request):
         if stream:
             def record_response(res):
                 app.state.responses[res["id"]] = res
-                log_conversation(body, res)
+                log_conversation(request.url.path, body, res)
 
             async def iterator():
                 async for chunk in stream_chat_response(resp, on_complete=record_response):
@@ -97,7 +97,7 @@ async def chat_completions(request: Request):
 
         formatted = format_chat_response(data)
         app.state.responses[formatted["id"]] = formatted
-        log_conversation(body, formatted)
+        log_conversation(request.url.path, body, formatted)
         return JSONResponse(formatted)
     except httpx.HTTPError as e:
         logger.error("Error from Ollama: {}", e)

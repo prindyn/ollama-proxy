@@ -8,7 +8,8 @@ This project provides a small FastAPI service that exposes an OpenAI-compatible 
 - `/v1/chat/completions` proxies chat completion requests using the same payload structure as the OpenAI API and transforms the response back into the OpenAI format.
 - Supports tool usage (`tools` and `tool_choice`) when forwarding to Ollama.
 - `/v1/responses` lists previous chat completions.
-- Chat requests and responses are saved to `logs/conversations.log`. Each
+- Chat requests and responses are saved to JSON files under `logs/`. The file
+  name matches the last part of the request path, e.g. `completions.json`. Each
   request and response is written as a separate JSON line so the file can be
   processed as a JSONL log.
 
