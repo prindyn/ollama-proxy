@@ -30,10 +30,11 @@ def format_chat_response(data: dict) -> dict:
     return res
 
 
-async def stream_chat_response(resp) -> AsyncIterator[str]:
+async def stream_chat_response(resp, on_complete=None) -> AsyncIterator[str]:
     """Yield OpenAI-style SSE events from an Ollama streaming response."""
     resp_id = f"chatcmpl-{uuid.uuid4().hex}"
     prev = ""
+    collected = ""
     first = True
     async for line in resp.aiter_lines():
         if not line:
@@ -42,6 +43,7 @@ async def stream_chat_response(resp) -> AsyncIterator[str]:
         content = data.get("message", {}).get("content", "")
         diff = content[len(prev):]
         prev = content
+        collected += diff
         chunk = {
             "id": resp_id,
             "object": "chat.completion.chunk",
@@ -65,6 +67,13 @@ async def stream_chat_response(resp) -> AsyncIterator[str]:
             chunk["choices"][0]["finish_reason"] = data.get("done_reason", "stop")
             yield f"data: {json.dumps(chunk)}\n\n"
             yield "data: [DONE]\n\n"
+            if on_complete is not None:
+                result = {
+                    "model": data.get("model"),
+                    "message": {"role": "assistant", "content": collected},
+                    "done_reason": data.get("done_reason", "stop"),
+                }
+                on_complete(format_chat_response(result))
             break
         else:
             yield f"data: {json.dumps(chunk)}\n\n"

@@ -2,9 +2,8 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 import httpx
 import os
-import json
 from loguru import logger
-from .logger import configure_logger
+from .logger import configure_logger, log_conversation
 from .openai_adapter import format_chat_response, stream_chat_response
 
 configure_logger()
@@ -20,6 +19,8 @@ async def startup_event():
     logger.info("Starting up proxy, connecting to {url}", url=OLLAMA_BASE_URL)
     app.state.client = httpx.AsyncClient(base_url=OLLAMA_BASE_URL, timeout=None)
     app.state.responses = {}
+    app.state.log_dir = os.getenv("LOG_DIR", "logs")
+    os.makedirs(app.state.log_dir, exist_ok=True)
 
 
 @app.on_event("shutdown")
@@ -49,11 +50,9 @@ async def get_response(resp_id: str):
 async def list_models():
     """Return available models from Ollama"""
     try:
-        logger.debug("Fetching models from Ollama")
         resp = await app.state.client.get("/api/tags")
         resp.raise_for_status()
         data = resp.json()
-        logger.debug("Models response: {}", data)
         models = [{"id": m["name"], "object": "model"} for m in data.get("models", [])]
         return {"object": "list", "data": models}
     except Exception as e:
@@ -64,7 +63,6 @@ async def list_models():
 async def chat_completions(request: Request):
     """Proxy OpenAI chat completions to Ollama"""
     body = await request.json()
-    logger.debug("Chat completion request body: {}", body)
     model = body.get("model")
     messages = body.get("messages")
     stream = body.get("stream", False)
@@ -82,23 +80,24 @@ async def chat_completions(request: Request):
             payload[key] = body[key]
 
     try:
-        logger.debug(
-            "Forwarding chat completion to Ollama: model=%s stream=%s", model, stream
-        )
+        logger.info("Forwarding chat completion to Ollama: model=%s stream=%s", model, stream)
         resp = await app.state.client.post("/api/chat", json=payload)
         resp.raise_for_status()
         if stream:
+            def record_response(res):
+                app.state.responses[res["id"]] = res
+                log_conversation(body, res)
+
             async def iterator():
-                async for chunk in stream_chat_response(resp):
+                async for chunk in stream_chat_response(resp, on_complete=record_response):
                     yield chunk
             return StreamingResponse(iterator(), media_type="text/event-stream")
 
         data = resp.json()
-        logger.debug("Ollama response: {}", data)
 
         formatted = format_chat_response(data)
         app.state.responses[formatted["id"]] = formatted
-        logger.debug("Proxy response body: {}", formatted)
+        log_conversation(body, formatted)
         return JSONResponse(formatted)
     except httpx.HTTPError as e:
         logger.error("Error from Ollama: {}", e)
