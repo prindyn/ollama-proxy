@@ -3,6 +3,9 @@ from fastapi.responses import JSONResponse, StreamingResponse
 import httpx
 import os
 from loguru import logger
+from .logger import configure_logger
+
+configure_logger()
 
 app = FastAPI(
     title="Ollama Proxy", description="OpenAI compatible API for Ollama models"
