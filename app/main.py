@@ -1,115 +1,101 @@
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
-import httpx
-import os
-from datetime import datetime
-from loguru import logger
-from langchain.llms import Ollama
-from langchain.agents import initialize_agent, AgentType
-from .logger import configure_logger, log_conversation
-from .tools import get_tools
+"""Multi-provider LLM Proxy API."""
 
+from datetime import datetime
+from typing import Optional, Dict, Any
+
+from fastapi import FastAPI, HTTPException, Query, Request
+from loguru import logger
+
+from .configs import Config
+from .models import ChatCompletionRequest, ChatCompletionResponse, Message
+from .providers import (
+    get_provider,
+    get_provider_for_model,
+    list_all_models,
+    get_available_providers,
+)
+from .logger import configure_logger, log_conversation
+from .services import chat_completion_handler
+
+
+# Configure logging
 configure_logger()
 
-app = FastAPI(title="Ollama Proxy", description="OpenAI compatible API for Ollama models")
-
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-
-
-
-@app.on_event("startup")
-async def startup_event():
-    logger.info("Starting up proxy, connecting to {url}", url=OLLAMA_BASE_URL)
-    app.state.client = httpx.AsyncClient(base_url=OLLAMA_BASE_URL, timeout=None)
-    app.state.responses = {}
-    app.state.log_dir = os.getenv("LOG_DIR", "logs")
-    os.makedirs(app.state.log_dir, exist_ok=True)
+# Initialize app
+app = FastAPI(
+    title=Config.APP_TITLE,
+    description=Config.APP_DESCRIPTION,
+    version=Config.API_VERSION,
+)
 
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    logger.info("Shutting down proxy")
-    await app.state.client.aclose()
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """Log all incoming requests."""
+    logger.info(f"{request.method} {request.url.path} from {request.client.host}")
+    response = await call_next(request)
+    logger.info(f"Response status: {response.status_code}")
+    return response
+
 
 @app.get("/")
-async def root():
-    return {"message": "Ollama proxy running"}
+async def health() -> Dict[str, Any]:
+    """Health check."""
+    response = {
+        "status": "ok",
+        "available_providers": get_available_providers(),
+        "default_provider": Config.DEFAULT_PROVIDER,
+    }
+    logger.info("Health check requested")
+    return response
 
-
-@app.get("/v1/responses")
-async def list_responses():
-    """Return stored responses."""
-    return {"object": "list", "data": list(app.state.responses.values())}
-
-
-@app.get("/v1/responses/{resp_id}")
-async def get_response(resp_id: str):
-    resp = app.state.responses.get(resp_id)
-    if resp is None:
-        raise HTTPException(status_code=404, detail="Response not found")
-    return JSONResponse(resp)
 
 @app.get("/v1/models")
-async def list_models():
-    """Return available models from Ollama"""
+async def list_models(provider: Optional[str] = Query(None)) -> Dict[str, Any]:
+    """List available models."""
     try:
-        resp = await app.state.client.get("/api/tags")
-        resp.raise_for_status()
-        data = resp.json()
-        models = [{"id": m["name"], "object": "model"} for m in data.get("models", [])]
-        return {"object": "list", "data": models}
+        if provider:
+            logger.info(f"Listing models for provider: {provider}")
+            # List models for specific provider
+            provider_instance = get_provider(provider, model="dummy")
+            models = await provider_instance.list_models()
+            for model in models:
+                model["provider"] = provider
+            response = {"object": "list", "data": models}
+        else:
+            logger.info("Listing all available models")
+            # List all models
+            models = await list_all_models()
+            response = {"object": "list", "data": models}
+
+        logger.info(f"Found {len(response['data'])} models")
+        return response
     except Exception as e:
-        logger.error("Error fetching models: {}", e)
+        logger.error(f"Failed to list models: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/v1/chat/completions")
-async def chat_completions(request: Request):
-    """Generate a chat completion using LangChain tools."""
-    body = await request.json()
-    model = body.get("model")
-    messages = body.get("messages")
-    if not model or not messages:
-        raise HTTPException(status_code=400, detail="model and messages required")
+async def chat_completions(request: ChatCompletionRequest) -> ChatCompletionResponse:
+    """Process chat completion request."""
 
-    user_input = next((m.get("content") for m in reversed(messages) if m.get("role") == "user"), None)
-    if not user_input:
-        raise HTTPException(status_code=400, detail="No user input found")
-
+    request_dict = request.model_dump()
     try:
-        llm = Ollama(model=model, base_url=OLLAMA_BASE_URL)
-        agent = initialize_agent(get_tools(), llm, agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION, verbose=False)
-        answer = agent.invoke({"input": user_input})
+        # Build response
+        response = await chat_completion_handler(request)
 
-        res = {
-            "id": f"chatcmpl-{int(datetime.now().timestamp())}",
-            "object": "chat.completion",
-            "created": int(datetime.now().timestamp()),
-            "model": model,
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {"role": "assistant", "content": answer},
-                    "finish_reason": "stop",
-                }
-            ],
-        }
+        # Log conversation to file
+        log_conversation("completions", request_dict, response.model_dump())
 
-        app.state.responses[res["id"]] = res
-        log_conversation(request.url.path, body, res)
-        return JSONResponse(res)
-    except httpx.HTTPError as e:
-        logger.error("Error from Ollama: {}", e)
-        detail = getattr(e, "response", None)
-        if detail is not None:
-            try:
-                err = detail.json()
-            except Exception:
-                err = {"error": detail.text}
-            log_conversation(request.url.path, body, err)
-            raise HTTPException(status_code=detail.status_code, detail=err)
-        log_conversation(request.url.path, body, {"error": str(e)})
-        raise HTTPException(status_code=500, detail=str(e))
+        return response
     except Exception as e:
-        logger.error("Unhandled error: {}", e)
-        log_conversation(request.url.path, body, {"error": str(e)})
+        logger.exception("Chat completion failed")
+        # Log failed request
+        log_conversation("completions", request_dict, {"error": str(e)})
         raise HTTPException(status_code=500, detail=str(e))
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=8000)
