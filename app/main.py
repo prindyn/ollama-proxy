@@ -3,7 +3,9 @@ from fastapi.responses import JSONResponse, StreamingResponse
 import httpx
 import os
 
-app = FastAPI(title="Ollama Proxy", description="OpenAI compatible API for Ollama models")
+app = FastAPI(
+    title="Ollama Proxy", description="OpenAI compatible API for Ollama models"
+)
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
@@ -17,9 +19,11 @@ async def startup_event():
 async def shutdown_event():
     await app.state.client.aclose()
 
+
 @app.get("/")
 async def root():
     return {"message": "Ollama proxy running"}
+
 
 @app.get("/v1/models")
 async def list_models():
@@ -32,6 +36,7 @@ async def list_models():
         return {"object": "list", "data": models}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
@@ -57,9 +62,11 @@ async def chat_completions(request: Request):
         resp = await app.state.client.post("/api/chat", json=payload)
         resp.raise_for_status()
         if stream:
+
             async def iterator():
                 async for chunk in resp.aiter_text():
                     yield chunk
+
             return StreamingResponse(iterator(), media_type="text/event-stream")
         return JSONResponse(resp.json())
     except httpx.HTTPError as e:
