@@ -2,7 +2,14 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 import httpx
 import os
+from loguru import logger
 
+    logger.info("Starting up proxy, connecting to {url}", url=OLLAMA_BASE_URL)
+    logger.info("Shutting down proxy")
+        logger.debug("Fetching models from Ollama")
+        logger.error("Error fetching models: {}", e)
+        logger.debug("Forwarding chat completion to Ollama: model=%s stream=%s", model, stream)
+        logger.error("Error from Ollama: {}", e)
 app = FastAPI(
     title="Ollama Proxy", description="OpenAI compatible API for Ollama models"
 )
