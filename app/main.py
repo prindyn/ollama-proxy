@@ -3,8 +3,10 @@ from fastapi.responses import JSONResponse, StreamingResponse
 import httpx
 import os
 from loguru import logger
+from dotenv import load_dotenv
 from .logger import configure_logger
 
+load_dotenv()
 configure_logger()
 
 app = FastAPI(
@@ -53,6 +55,7 @@ async def chat_completions(request: Request):
     model = body.get("model")
     messages = body.get("messages")
     stream = body.get("stream", False)
+    logger.debug("Request to Ollama: {}", body)
     if not model or not messages:
         raise HTTPException(status_code=400, detail="model and messages required")
 
@@ -72,6 +75,7 @@ async def chat_completions(request: Request):
         )
         resp = await app.state.client.post("/api/chat", json=payload)
         resp.raise_for_status()
+        logger.debug("Response from Ollama: {}", resp.json())
         if stream:
 
             async def iterator():

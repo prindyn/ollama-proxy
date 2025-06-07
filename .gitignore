@@ -6,3 +6,4 @@ env/
 *.pyo
 *.egg-info/
 .DS_Store
+.env
