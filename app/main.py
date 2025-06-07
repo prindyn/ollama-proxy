@@ -69,15 +69,7 @@ async def chat_completions(request: Request):
     if not model or not messages:
         raise HTTPException(status_code=400, detail="model and messages required")
 
-    payload = {
-        "model": model,
-        "messages": messages,
-        "stream": stream,
-    }
-    # Add other fields if present
-    for key in ["format", "options", "tools", "tool_choice"]:
-        if key in body:
-            payload[key] = body[key]
+    payload = body
 
     try:
         logger.info("Forwarding chat completion to Ollama: model=%s stream=%s", model, stream)
