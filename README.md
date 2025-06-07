@@ -16,6 +16,7 @@ This project provides a small FastAPI service that exposes an OpenAI-compatible 
    pip install -r requirements.txt
    ```
 2. Run an Ollama server locally or set `OLLAMA_BASE_URL` to point to a remote instance.
+   Environment variables such as `OLLAMA_BASE_URL`, `ENABLE_LOCAL_TOOLS`, and `LOGURU_LEVEL` can be placed in a `.env` file which is loaded automatically.
 3. Start the proxy:
    ```bash
    uvicorn app.main:app --reload
