@@ -1,74 +1,31 @@
-"""Provider implementations for different LLM services using LangChain."""
+"""Provider implementations for different LLM services."""
 
 import os
+import json
+import uuid
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
+from datetime import datetime
 
 import httpx
 from loguru import logger
-from langchain_community.llms import Ollama
-from langchain_openai import ChatOpenAI
-from langchain.agents import initialize_agent, AgentType
-from langchain.schema import HumanMessage, AIMessage, SystemMessage
-
-# Import from your existing modules
-from .logger import LoggingCallbackHandler
-from .tools import OpenAIToolParser
 
 
 class BaseProvider(ABC):
-    """Abstract base class for LLM providers using LangChain."""
+    """Abstract base class for LLM providers."""
 
     def __init__(self, model: str, **kwargs):
         self.model = model
-        self.llm = None
-        self.tool_parser = OpenAIToolParser()
 
     @abstractmethod
-    def _create_llm(self):
-        """Create the LangChain LLM instance."""
-        pass
-
-    def _convert_messages(self, messages: List[Dict[str, str]]):
-        """Convert OpenAI-style messages to LangChain format."""
-        converted = []
-        for msg in messages:
-            role = msg.get("role", "")
-            content = msg.get("content", "")
-
-            if role == "system":
-                converted.append(SystemMessage(content=content))
-            elif role == "user":
-                converted.append(HumanMessage(content=content))
-            elif role == "assistant":
-                converted.append(AIMessage(content=content))
-
-        return converted
-
     async def chat_completion(
-        self, messages: List[Dict[str, str]], tools: Optional[List[Dict]] = None
-    ) -> str:
-        """Process chat completion request using LangChain agent."""
-        if not self.llm:
-            self.llm = self._create_llm()
-
-        # Parse tools if provided
-        parsed_tools = self.tool_parser.parse(tools) if tools else []
-
-        # Create agent
-        agent = initialize_agent(
-            llm=self.llm,
-            tools=parsed_tools,
-            agent=AgentType.OPENAI_MULTI_FUNCTIONS,
-            handle_parsing_errors=True,
-            verbose=False,
-        )
-
-        # Convert messages to proper format
-        # converted_messages = self._convert_messages(messages)
-
-        result = agent.run(messages)
-        return result
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        """Process chat completion request."""
+        pass
 
     @abstractmethod
     async def list_models(self) -> List[Dict[str, str]]:
@@ -76,41 +33,8 @@ class BaseProvider(ABC):
         pass
 
 
-class OllamaProvider(BaseProvider):
-    """Ollama provider implementation using LangChain."""
-
-    def __init__(self, model: str, base_url: Optional[str] = None):
-        super().__init__(model)
-        self.base_url = base_url or os.getenv(
-            "OLLAMA_BASE_URL", "http://localhost:11434"
-        )
-
-    def _create_llm(self):
-        """Create Ollama LLM instance."""
-        return Ollama(
-            model=self.model,
-            base_url=self.base_url,
-            callbacks=[LoggingCallbackHandler()],
-        )
-
-    async def list_models(self) -> List[Dict[str, str]]:
-        """List available Ollama models."""
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.get(f"{self.base_url}/api/tags")
-                response.raise_for_status()
-                models = response.json().get("models", [])
-                return [{"id": m["name"], "object": "model"} for m in models]
-            except httpx.HTTPStatusError as e:
-                raise Exception(
-                    f"Ollama API error: {e.response.status_code} - {e.response.text}"
-                )
-            except Exception as e:
-                raise Exception(f"Failed to fetch Ollama models: {e}")
-
-
 class OpenAIProvider(BaseProvider):
-    """OpenAI provider implementation using LangChain."""
+    """OpenAI provider implementation."""
 
     def __init__(
         self, model: str, api_key: Optional[str] = None, base_url: Optional[str] = None
@@ -121,14 +45,56 @@ class OpenAIProvider(BaseProvider):
         if not self.api_key:
             raise ValueError("OpenAI API key is required")
 
-    def _create_llm(self):
-        """Create OpenAI LLM instance."""
-        return ChatOpenAI(
-            model=self.model,
-            openai_api_key=self.api_key,
-            openai_api_base=self.base_url,
-            callbacks=[LoggingCallbackHandler()],
-        )
+    async def chat_completion(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        """Make direct OpenAI API call."""
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+        # Build request payload
+        payload = {"model": self.model, "messages": messages, "stream": False}
+
+        # Add optional parameters
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = kwargs.get("tool_choice", "auto")
+
+        for param in [
+            "temperature",
+            "max_tokens",
+            "top_p",
+            "frequency_penalty",
+            "presence_penalty",
+            "user",
+        ]:
+            if param in kwargs and kwargs[param] is not None:
+                payload[param] = kwargs[param]
+
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.post(
+                    f"{self.base_url}/chat/completions",
+                    headers=headers,
+                    json=payload,
+                    timeout=60.0,
+                )
+                response.raise_for_status()
+                return response.json()
+            except httpx.HTTPStatusError as e:
+                error_detail = e.response.text
+                logger.error(
+                    f"OpenAI API error: {e.response.status_code} - {error_detail}"
+                )
+                raise Exception(f"OpenAI API error: {error_detail}")
+            except Exception as e:
+                logger.error(f"Failed to call OpenAI: {e}")
+                raise
 
     async def list_models(self) -> List[Dict[str, str]]:
         """List available OpenAI models."""
@@ -142,16 +108,166 @@ class OpenAIProvider(BaseProvider):
                 chat_models = [
                     m
                     for m in models_data.get("data", [])
-                    if "gpt" in m.get("id", "").lower()
+                    if any(
+                        prefix in m.get("id", "").lower() for prefix in ["gpt", "o1"]
+                    )
                 ]
                 return [{"id": m["id"], "object": "model"} for m in chat_models]
             except Exception as e:
                 logger.warning(f"Failed to fetch OpenAI models: {e}")
-                return []
+                # Return common models as fallback
+                return [
+                    {"id": "gpt-4", "object": "model"},
+                    {"id": "gpt-4-turbo", "object": "model"},
+                    {"id": "gpt-3.5-turbo", "object": "model"},
+                ]
+
+
+class OllamaProvider(BaseProvider):
+    """Ollama provider implementation."""
+
+    def __init__(self, model: str, base_url: Optional[str] = None):
+        super().__init__(model)
+        self.base_url = base_url or os.getenv(
+            "OLLAMA_BASE_URL", "http://localhost:11434"
+        )
+
+    async def chat_completion(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        """Ollama chat completion with tool call simulation."""
+
+        # If tools are provided, inject instructions into the system message
+        if tools:
+            tool_instructions = self._create_tool_instructions(tools)
+            # Prepend tool instructions to the first system message or add new one
+            if messages and messages[0]["role"] == "system":
+                messages[0]["content"] = (
+                    tool_instructions + "\n\n" + messages[0]["content"]
+                )
+            else:
+                messages.insert(0, {"role": "system", "content": tool_instructions})
+
+        # Make Ollama API call
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "stream": False,
+            "options": {
+                "temperature": kwargs.get("temperature", 1.0),
+                "top_p": kwargs.get("top_p", 1.0),
+            },
+        }
+
+        if "max_tokens" in kwargs:
+            payload["options"]["num_predict"] = kwargs["max_tokens"]
+
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.post(
+                    f"{self.base_url}/api/chat", json=payload, timeout=60.0
+                )
+                response.raise_for_status()
+                ollama_response = response.json()
+
+                # Convert Ollama response to OpenAI format
+                content = ollama_response.get("message", {}).get("content", "")
+
+                # Check if this is a tool call
+                tool_calls = self._extract_tool_calls(content) if tools else None
+
+                # Build OpenAI-compatible response
+                message = {
+                    "role": "assistant",
+                    "content": content if not tool_calls else None,
+                }
+
+                if tool_calls:
+                    message["tool_calls"] = tool_calls
+
+                return {
+                    "id": f"chatcmpl-{uuid.uuid4().hex[:16]}",
+                    "object": "chat.completion",
+                    "created": int(datetime.now().timestamp()),
+                    "model": self.model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": message,
+                            "finish_reason": "tool_calls" if tool_calls else "stop",
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": ollama_response.get("prompt_eval_count", 0),
+                        "completion_tokens": ollama_response.get("eval_count", 0),
+                        "total_tokens": ollama_response.get("prompt_eval_count", 0)
+                        + ollama_response.get("eval_count", 0),
+                    },
+                }
+
+            except Exception as e:
+                logger.error(f"Ollama API error: {e}")
+                raise
+
+    def _create_tool_instructions(self, tools: List[Dict[str, Any]]) -> str:
+        """Create instructions for tool usage."""
+        tool_list = []
+        for tool in tools:
+            func = tool.get("function", {})
+            tool_list.append(f"- {func.get('name')}: {func.get('description')}")
+
+        return (
+            "You have access to the following tools:\n"
+            + "\n".join(tool_list)
+            + "\n\nTo use a tool, respond ONLY with a JSON object in this exact format:\n"
+            + '{"tool_call": {"name": "tool_name", "arguments": {...}}}\n'
+            + "Do not include any other text when making a tool call."
+        )
+
+    def _extract_tool_calls(self, content: str) -> Optional[List[Dict[str, Any]]]:
+        """Extract tool calls from Ollama response."""
+        try:
+            # Look for JSON tool call in the content
+            if '{"tool_call"' in content:
+                start = content.find('{"tool_call"')
+                end = content.rfind("}") + 1
+                json_str = content[start:end]
+                data = json.loads(json_str)
+
+                if "tool_call" in data:
+                    tool_info = data["tool_call"]
+                    return [
+                        {
+                            "id": f"call_{uuid.uuid4().hex[:24]}",
+                            "type": "function",
+                            "function": {
+                                "name": tool_info["name"],
+                                "arguments": json.dumps(tool_info["arguments"]),
+                            },
+                        }
+                    ]
+        except:
+            pass
+        return None
+
+    async def list_models(self) -> List[Dict[str, str]]:
+        """List available Ollama models."""
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.get(f"{self.base_url}/api/tags")
+                response.raise_for_status()
+                models = response.json().get("models", [])
+                return [{"id": m["name"], "object": "model"} for m in models]
+            except Exception as e:
+                logger.error(f"Failed to fetch Ollama models: {e}")
+                raise
 
 
 class DeepSeekProvider(OpenAIProvider):
-    """DeepSeek provider implementation (OpenAI-compatible) using LangChain."""
+    """DeepSeek provider (OpenAI-compatible)."""
 
     def __init__(self, model: str, api_key: Optional[str] = None):
         api_key = api_key or os.getenv("DEEPSEEK_API_KEY")
@@ -172,7 +288,7 @@ class DeepSeekProvider(OpenAIProvider):
             ]
 
 
-# Single source of truth for provider configurations
+# Provider registry
 PROVIDER_REGISTRY = {
     "ollama": {
         "class": OllamaProvider,
@@ -192,10 +308,6 @@ PROVIDER_REGISTRY = {
 }
 
 
-# Factory instance
-_factory: Optional[Dict[str, str]] = None
-
-
 def get_provider(provider_type: str, model: str, **kwargs) -> BaseProvider:
     """Create a provider instance."""
     provider_config = PROVIDER_REGISTRY.get(provider_type.lower())
@@ -209,48 +321,16 @@ def get_provider(provider_type: str, model: str, **kwargs) -> BaseProvider:
 async def get_provider_for_model(
     model: str, default_provider: str = "ollama"
 ) -> BaseProvider:
-    """Get provider instance for a model, with auto-detection."""
-    global _factory
-
-    if _factory is None:
-        _factory = await _init_factory()
-
-    provider_type = _factory.get(model, default_provider)
-
-    # Check for model prefixes if exact match not found
-    if provider_type == default_provider and model not in _factory:
-        for mapped_model, mapped_provider in _factory.items():
-            if model.startswith(mapped_model):
-                provider_type = mapped_provider
-                break
+    """Get provider instance for a model."""
+    # Simple provider detection based on model name
+    if model.startswith("gpt") or model.startswith("o1"):
+        provider_type = "openai"
+    elif model.startswith("deepseek"):
+        provider_type = "deepseek"
+    else:
+        provider_type = default_provider
 
     return get_provider(provider_type, model)
-
-
-async def _init_factory() -> Dict[str, str]:
-    """Initialize model-to-provider mapping."""
-    model_mapping = {}
-
-    for provider_name, provider_config in PROVIDER_REGISTRY.items():
-        # Skip API providers if no key is set
-        if not is_provider_available(provider_name):
-            continue
-
-        try:
-            provider_class = provider_config["class"]
-            provider = provider_class("dummy")
-            models = await provider.list_models()
-            for model in models:
-                model_mapping[model["id"]] = provider_name
-        except Exception as e:
-            logger.debug(f"Failed to list {provider_name} models: {e}")
-
-    return model_mapping
-
-
-def list_providers() -> List[str]:
-    """List available provider types."""
-    return list(PROVIDER_REGISTRY.keys())
 
 
 async def list_all_models() -> List[Dict[str, Any]]:
@@ -258,7 +338,6 @@ async def list_all_models() -> List[Dict[str, Any]]:
     all_models = []
 
     for provider_name, provider_config in PROVIDER_REGISTRY.items():
-        # Skip API providers if no key is set
         if not is_provider_available(provider_name):
             continue
 
@@ -276,7 +355,7 @@ async def list_all_models() -> List[Dict[str, Any]]:
 
 
 def is_provider_available(provider_name: str) -> bool:
-    """Check if a provider is available (has required configuration)."""
+    """Check if a provider is available."""
     provider_config = PROVIDER_REGISTRY.get(provider_name.lower())
     if not provider_config:
         return False
@@ -289,5 +368,5 @@ def is_provider_available(provider_name: str) -> bool:
 
 
 def get_available_providers() -> List[str]:
-    """List only available (configured) providers."""
+    """List only available providers."""
     return [name for name in PROVIDER_REGISTRY.keys() if is_provider_available(name)]

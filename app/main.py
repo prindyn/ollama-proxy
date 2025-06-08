@@ -7,10 +7,9 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from loguru import logger
 
 from .configs import Config
-from .models import ChatCompletionRequest, ChatCompletionResponse, Message
+from .models import ChatCompletionRequest, ChatCompletionResponse
 from .providers import (
     get_provider,
-    get_provider_for_model,
     list_all_models,
     get_available_providers,
 )
@@ -78,14 +77,14 @@ async def list_models(provider: Optional[str] = Query(None)) -> Dict[str, Any]:
 @app.post("/v1/chat/completions")
 async def chat_completions(request: ChatCompletionRequest) -> ChatCompletionResponse:
     """Process chat completion request."""
-
     request_dict = request.model_dump()
     try:
-        # Build response
+        # Process the request
         response = await chat_completion_handler(request)
 
         # Log conversation to file
-        log_conversation("completions", request_dict, response.model_dump())
+        response_dict = response.model_dump()
+        log_conversation("completions", request_dict, response_dict)
 
         return response
     except Exception as e:
